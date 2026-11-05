@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Conductores · Vanko</title>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet" />
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<style>
+  :root {
+    --orange: #FF5A1F;
+    --navy: #102A43;
+    --white: #FFFFFF;
+    --gray: #F3F5F7;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background: var(--navy);
+    color: var(--navy);
+  }
+  #map { position: absolute; inset: 0; }
+
+  /* ---------- Login ---------- */
+  #login {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: var(--navy);
+  }
+  #login.hidden { display: none; }
+  .card {
+    background: var(--white); border-radius: 16px; padding: 32px;
+    width: 320px; max-width: calc(100vw - 32px);
+    box-shadow: 0 12px 40px rgba(0,0,0,.35);
+  }
+  .card h1 {
+    font-size: 20px; margin: 0 0 4px; color: var(--navy);
+  }
+  .card p { margin: 0 0 20px; font-size: 13px; color: #627D98; }
+  .card input {
+    width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid #D9E2EC;
+    font-size: 15px; margin-bottom: 12px; color: var(--navy); background: var(--gray);
+  }
+  .card input:focus { outline: 2px solid var(--orange); }
+  .card button {
+    width: 100%; padding: 12px; border-radius: 10px; border: none;
+    background: var(--orange); color: var(--white); font-size: 15px; font-weight: 600;
+    cursor: pointer;
+  }
+  .card button:disabled { opacity: .5; cursor: default; }
+  .card .error { color: #D64545; font-size: 13px; margin: 10px 0 0; min-height: 16px; }
+  .card .link { display: inline-block; margin-top: 14px; font-size: 13px; color: #627D98; cursor: pointer; }
+
+  /* ---------- Map chrome ---------- */
+  .pill {
+    position: absolute; min-height: 40px; display: flex; align-items: center; gap: 6px;
+    border-radius: 999px; padding: 0 16px; background: var(--white); color: var(--navy);
+    font-size: 13px; font-weight: 600; box-shadow: 0 4px 14px rgba(0,0,0,.18);
+    cursor: pointer; border: none; white-space: nowrap;
+  }
+  .pill.badge { cursor: default; background: var(--orange); color: var(--white); }
+  #count { top: 16px; right: 16px; }
+  #fitAll { top: 64px; right: 16px; }
+  #fullscreen { top: 112px; right: 16px; }
+  #logout { top: 16px; left: 16px; }
+
+  #filters {
+    position: absolute; left: 0; right: 0; bottom: 20px;
+    display: flex; gap: 8px; overflow-x: auto; padding: 0 16px;
+    scrollbar-width: none;
+  }
+  #filters::-webkit-scrollbar { display: none; }
+  .chip {
+    flex: 0 0 auto; min-height: 36px; padding: 0 14px; border-radius: 999px; border: none;
+    background: var(--white); color: var(--navy); font-size: 13px; font-weight: 600;
+    box-shadow: 0 4px 14px rgba(0,0,0,.18); cursor: pointer;
+  }
+  .chip.selected { background: var(--orange); color: var(--white); }
+
+  .mapboxgl-popup-content { border-radius: 10px; font-size: 13px; padding: 8px 12px; }
+
+  #denied {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    background: var(--navy);
+  }
+  #denied.show { display: flex; }
+</style>
+</head>
+<body>
+
+<div id="login" class="hidden">
+  <div class="card">
+    <h1>Conductores</h1>
+    <p>Acceso de soporte Vanko</p>
+
+    <div id="phoneStep">
+      <input id="phone" type="tel" placeholder="+57 300 000 0000" autocomplete="tel" />
+      <button id="sendCode">Enviar código</button>
+    </div>
+
+    <div id="codeStep" style="display:none;">
+      <input id="code" type="text" inputmode="numeric" maxlength="6" placeholder="Código de 6 dígitos" autocomplete="one-time-code" />
+      <button id="verifyCode">Entrar</button>
+      <div class="link" id="backToPhone">Cambiar número</div>
+    </div>
+
+    <div class="error" id="loginError"></div>
+  </div>
+</div>
+
+<div id="denied">
+  <div class="card">
+    <h1>Sin acceso</h1>
+    <p>Esta cuenta no tiene permisos de soporte.</p>
+    <button id="deniedLogout">Cerrar sesión</button>
+  </div>
+</div>
+
+<div id="map"></div>
+<button class="pill badge" id="count">0 en línea</button>
+<button class="pill" id="fitAll">Ver todas</button>
+<button class="pill" id="fullscreen">Pantalla completa</button>
+<button class="pill" id="logout">Salir</button>
+<div id="filters"></div>
+
+<script>
+// --- Config (claves públicas: el token Mapbox es de cliente y la anon key
+// de Supabase queda protegida por RLS y por fn_is_support() en el servidor) ---
+const SUPABASE_URL = 'https://acantdntozykexqwfrzi.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFjYW50ZG50b3p5a2V4cXdmcnppIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIxMjk5NzMsImV4cCI6MjEwNzcwNTk3M30.W-kXz-vCduJ5mEe23zVVTkz8gV4cVyKGnfw411IJBzQ';
+const MAPBOX_TOKEN = 'pk.eyJ1IjoidmFua29hcHAiLCJhIjoiY213Mno2c2k1MDR0MTMwcHc0YmY4eW1udiJ9.tZEPYPZznuvo1NrVG99WJw';
+
+const STYLES = {
+  day: 'mapbox://styles/vankoapp/cmvepdafr002201qlgwg3heaj',
+  night: 'mapbox://styles/vankoapp/cmvepcveg003301pd6mf8hnnb',
+};
+
+const VEHICLE_TYPES = ['auto', 'confort', 'electric', 'premium_xl', 'lujo', 'moto'];
+const LABELS = { auto: 'Auto', confort: 'Comfort', electric: 'Eléctrico', premium_xl: 'Camioneta', lujo: 'Lujo', moto: 'Moto' };
+const ICONS = { auto: 'icons/vehicle-auto.png', confort: 'icons/vehicle-confort.png', electric: 'icons/vehicle-electric.png', premium_xl: 'icons/vehicle-premium_xl.png', lujo: 'icons/vehicle-lujo.png', moto: 'icons/vehicle-moto.png' };
+
+const BARRANQUILLA = { center: [-74.7813, 10.9685], zoom: 12 };
+const POLL_MS = 5000;
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+mapboxgl.accessToken = MAPBOX_TOKEN;
+
+// Colombia es UTC-5 todo el año: noche 18:00–06:00.
+function colombiaMode() {
+  const h = (new Date().getUTCHours() + 24 - 5) % 24;
+  return (h >= 18 || h < 6) ? 'night' : 'day';
+}
+
+const loginEl = document.getElementById('login');
+const deniedEl = document.getElementById('denied');
+const loginError = document.getElementById('loginError');
+let phoneForOtp = '';
+
+function normalizePhone(v) {
+  let s = v.trim().replace(/[^\d+]/g, '');
+  if (!s.startsWith('+')) s = '+57' + s.replace(/^57/, '');
+  return s;
+}
+
+document.getElementById('sendCode').addEventListener('click', async () => {
+  const raw = document.getElementById('phone').value;
+  phoneForOtp = normalizePhone(raw);
+  loginError.textContent = '';
+  const btn = document.getElementById('sendCode');
+  btn.disabled = true;
+  const { error } = await sb.auth.signInWithOtp({ phone: phoneForOtp });
+  btn.disabled = false;
+  if (error) { loginError.textContent = 'No se pudo enviar el código.'; return; }
+  document.getElementById('phoneStep').style.display = 'none';
+  document.getElementById('codeStep').style.display = 'block';
+});
+
+document.getElementById('backToPhone').addEventListener('click', () => {
+  document.getElementById('codeStep').style.display = 'none';
+  document.getElementById('phoneStep').style.display = 'block';
+  loginError.textContent = '';
+});
+
+document.getElementById('verifyCode').addEventListener('click', async () => {
+  const code = document.getElementById('code').value.trim();
+  loginError.textContent = '';
+  const btn = document.getElementById('verifyCode');
+  btn.disabled = true;
+  const { error } = await sb.auth.verifyOtp({ phone: phoneForOtp, token: code, type: 'sms' });
+  btn.disabled = false;
+  if (error) { loginError.textContent = 'Código incorrecto o vencido.'; return; }
+  await boot();
+});
+
+document.getElementById('logout').addEventListener('click', () => sb.auth.signOut().then(() => location.reload()));
+document.getElementById('deniedLogout').addEventListener('click', () => sb.auth.signOut().then(() => location.reload()));
+
+document.getElementById('fullscreen').addEventListener('click', () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen();
+});
+
+// --- Map ---
+let map = null;
+let currentMode = null;
+let filterType = null;
+let vehicles = [];
+let framedOnce = false;
+
+function iconFor(type) {
+  return VEHICLE_TYPES.includes(type) ? type : 'auto';
+}
+
+function loadIcons() {
+  return Promise.all(Object.entries(ICONS).map(([key, url]) => new Promise((resolve) => {
+    if (map.hasImage(key)) return resolve();
+    map.loadImage(url, (err, img) => {
+      if (!err && img && !map.hasImage(key)) map.addImage(key, img);
+      resolve();
+    });
+  })));
+}
+
+function ensureLayer() {
+  if (map.getSource('vehicles')) return;
+  map.addSource('vehicles', { type: 'geojson', data: toGeoJSON([]) });
+  map.addLayer({
+    id: 'vehicles-layer',
+    type: 'symbol',
+    source: 'vehicles',
+    layout: {
+      'icon-image': ['get', 'icon'],
+      'icon-rotate': ['get', 'heading'],
+      'icon-rotation-alignment': 'map',
+      'icon-pitch-alignment': 'map',
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+      'icon-size': ['interpolate', ['linear'], ['zoom'], 11, 0.55, 15, 0.9, 18, 1.2],
+    },
+  });
+  map.on('click', 'vehicles-layer', (e) => {
+    const f = e.features[0];
+    new mapboxgl.Popup({ closeButton: false, offset: 12 })
+      .setLngLat(f.geometry.coordinates)
+      .setHTML(`<strong>${f.properties.driverName}</strong><br/>${LABELS[f.properties.type] || f.properties.type}`)
+      .addTo(map);
+  });
+  map.on('mouseenter', 'vehicles-layer', () => { map.getCanvas().style.cursor = 'pointer'; });
+  map.on('mouseleave', 'vehicles-layer', () => { map.getCanvas().style.cursor = ''; });
+}
+
+function toGeoJSON(list) {
+  return {
+    type: 'FeatureCollection',
+    features: list.map((v) => ({
+      type: 'Feature',
+      id: v.id,
+      properties: { icon: iconFor(v.type), heading: v.heading || 0, driverName: v.driverName, type: v.type },
+      geometry: { type: 'Point', coordinates: [v.longitude, v.latitude] },
+    })),
+  };
+}
+
+function render() {
+  const shown = filterType ? vehicles.filter((v) => v.type === filterType) : vehicles;
+  document.getElementById('count').textContent = `${shown.length} en línea`;
+  const src = map.getSource('vehicles');
+  if (src) src.setData(toGeoJSON(shown));
+  if (!framedOnce && vehicles.length > 0) {
+    framedOnce = true;
+    fitAll();
+  }
+}
+
+function fitAll() {
+  const shown = filterType ? vehicles.filter((v) => v.type === filterType) : vehicles;
+  if (shown.length === 0) return;
+  if (shown.length === 1) {
+    map.easeTo({ center: [shown[0].longitude, shown[0].latitude], zoom: 14, duration: 600 });
+    return;
+  }
+  const lngs = shown.map((v) => v.longitude), lats = shown.map((v) => v.latitude);
+  map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], {
+    padding: { top: 80, bottom: 80, left: 60, right: 60 }, duration: 600,
+  });
+}
+document.getElementById('fitAll').addEventListener('click', fitAll);
+
+function buildFilters() {
+  const el = document.getElementById('filters');
+  el.innerHTML = '';
+  const all = document.createElement('button');
+  all.className = 'chip selected';
+  all.textContent = 'Todos';
+  all.addEventListener('click', () => { filterType = null; buildFilters(); render(); });
+  el.appendChild(all);
+  VEHICLE_TYPES.forEach((type) => {
+    const chip = document.createElement('button');
+    chip.className = 'chip' + (filterType === type ? ' selected' : '');
+    chip.textContent = LABELS[type];
+    chip.addEventListener('click', () => { filterType = type; buildFilters(); render(); });
+    el.appendChild(chip);
+  });
+  if (filterType === null) return;
+  el.querySelectorAll('.chip')[0].className = 'chip';
+}
+
+async function poll() {
+  const { data, error } = await sb.rpc('fn_support_all_vehicle_locations');
+  if (error || !data) return;
+  vehicles = data.map((row) => ({
+    id: row.id, type: row.vehicle_type, longitude: row.lng, latitude: row.lat,
+    heading: row.heading, driverName: row.driver_name,
+  }));
+  render();
+}
+
+function watchMode() {
+  setInterval(() => {
+    const next = colombiaMode();
+    if (next === currentMode) return;
+    currentMode = next;
+    map.setStyle(STYLES[next]);
+    map.once('style.load', async () => { await loadIcons(); ensureLayer(); render(); });
+  }, 60000);
+}
+
+async function startMap() {
+  currentMode = colombiaMode();
+  map = new mapboxgl.Map({
+    container: 'map', style: STYLES[currentMode], center: BARRANQUILLA.center, zoom: BARRANQUILLA.zoom,
+    maxBounds: [[-82.0, -4.3], [-66.8, 13.6]], attributionControl: true,
+  });
+  map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'bottom-right');
+  await new Promise((resolve) => map.on('load', resolve));
+  await loadIcons();
+  ensureLayer();
+  buildFilters();
+  poll();
+  setInterval(poll, POLL_MS);
+  watchMode();
+}
+
+// --- Boot ---
+async function boot() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) {
+    loginEl.classList.remove('hidden');
+    return;
+  }
+  const { error } = await sb.rpc('fn_support_all_vehicle_locations');
+  if (error) {
+    deniedEl.classList.add('show');
+    return;
+  }
+  loginEl.classList.add('hidden');
+  deniedEl.classList.remove('show');
+  if (!map) await startMap();
+}
+
+boot();
+</script>
+</body>
+</html>
