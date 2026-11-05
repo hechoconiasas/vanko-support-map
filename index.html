@@ -85,6 +85,8 @@
     background: var(--navy);
   }
   #denied.show { display: flex; }
+
+  #controls.hidden { display: none; }
 </style>
 </head>
 <body>
@@ -118,11 +120,13 @@
 </div>
 
 <div id="map"></div>
-<button class="pill badge" id="count">0 en línea</button>
-<button class="pill" id="fitAll">Ver todas</button>
-<button class="pill" id="fullscreen">Pantalla completa</button>
-<button class="pill" id="logout">Salir</button>
-<div id="filters"></div>
+<div id="controls" class="hidden">
+  <button class="pill badge" id="count">0 en línea</button>
+  <button class="pill" id="fitAll">Ver todas</button>
+  <button class="pill" id="fullscreen">Pantalla completa</button>
+  <button class="pill" id="logout">Salir</button>
+  <div id="filters"></div>
+</div>
 
 <script>
 // --- Config (claves públicas: el token Mapbox es de cliente y la anon key
@@ -154,6 +158,7 @@ function colombiaMode() {
 
 const loginEl = document.getElementById('login');
 const deniedEl = document.getElementById('denied');
+const controlsEl = document.getElementById('controls');
 const loginError = document.getElementById('loginError');
 let phoneForOtp = '';
 
@@ -347,15 +352,18 @@ async function boot() {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) {
     loginEl.classList.remove('hidden');
+    controlsEl.classList.add('hidden');
     return;
   }
   const { error } = await sb.rpc('fn_support_all_vehicle_locations');
   if (error) {
     deniedEl.classList.add('show');
+    controlsEl.classList.add('hidden');
     return;
   }
   loginEl.classList.add('hidden');
   deniedEl.classList.remove('show');
+  controlsEl.classList.remove('hidden');
   if (!map) await startMap();
 }
 
